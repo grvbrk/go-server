@@ -6,12 +6,19 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"regexp"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"githuv.com/grvbrk/go-server/internal/database"
 )
+
+type Chirp struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Body      string    `json:"body"`
+	UserID    uuid.UUID `json:"user_id"`
+}
 
 func (cfg *apiConfig) HealthCheckHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Content-Type", "text/plain; charset=utf-8")
@@ -46,71 +53,6 @@ func (cfg *apiConfig) Admin_ResetNumberOfHitsHandler(w http.ResponseWriter, r *h
 
 	cfg.fileserverHits.Store(0)
 	w.WriteHeader(http.StatusOK)
-}
-
-func (cfg *apiConfig) ValidateChirp(w http.ResponseWriter, r *http.Request) {
-	type reqBodyStruct struct {
-		Body string `json:"body"`
-	}
-
-	type resBodyStruct struct {
-		CleanedBody string `json:"cleaned_body"`
-	}
-
-	type resErrorStruct struct {
-		Error string `json:"error"`
-	}
-
-	body := reqBodyStruct{}
-	reqBodyBytes, err := io.ReadAll(r.Body)
-	if err != nil {
-		log.Printf("Error decoding parameters: %s", err)
-		w.WriteHeader(500)
-		return
-	}
-
-	err = json.Unmarshal(reqBodyBytes, &body)
-	if err != nil {
-		log.Printf("Error unmarshalling body: %s", err)
-		w.WriteHeader(500)
-		return
-	}
-
-	if len(body.Body) > 140 {
-		resErrorData := resErrorStruct{
-			Error: "Chirp is too long",
-		}
-
-		resErrorJSON, err := json.Marshal(resErrorData)
-		if err != nil {
-			log.Printf("Error marshalling JSON: %s", err)
-			w.WriteHeader(500)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(400)
-		w.Write(resErrorJSON)
-		return
-	}
-
-	wordsToHide := []string{"kerfuffle", "sharbert", "fornax"}
-	pattern := regexp.MustCompile(`(?i)\b(` + strings.Join(wordsToHide, "|") + `)\b`)
-	result := pattern.ReplaceAllString(body.Body, "****")
-
-	resData := resBodyStruct{
-		CleanedBody: result,
-	}
-
-	resDataJSON, err := json.Marshal(resData)
-	if err != nil {
-		log.Printf("Error marshalling JSON: %s", err)
-		w.WriteHeader(500)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-	w.Write(resDataJSON)
-
 }
 
 func (cfg *apiConfig) AddUserHandler(w http.ResponseWriter, r *http.Request) {
@@ -164,4 +106,130 @@ func (cfg *apiConfig) AddUserHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(201)
 	w.Write(resDataJSON)
 
+}
+
+func (cfg *apiConfig) CreateChirpHandler(w http.ResponseWriter, r *http.Request) {
+	type reqBodyStruct struct {
+		UserId uuid.UUID `json:"user_id"`
+		Body   string    `json:"body"`
+	}
+
+	type resBodyStruct struct {
+		ID        uuid.UUID `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Body      string    `json:"body"`
+		UserID    uuid.UUID `json:"user_id"`
+	}
+
+	body := reqBodyStruct{}
+	reqBodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		log.Printf("Error decoding parameters: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	err = json.Unmarshal(reqBodyBytes, &body)
+	if err != nil {
+		log.Printf("Error unmarshalling body: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	chirp, err := cfg.db.CreateChirp(r.Context(), database.CreateChirpParams{
+		UserID: body.UserId,
+		Body:   body.Body,
+	})
+	if err != nil {
+		log.Printf("Error unmarshalling body: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	resData := resBodyStruct{
+		ID:        chirp.ID,
+		CreatedAt: chirp.CreatedAt,
+		UpdatedAt: chirp.UpdatedAt,
+		Body:      chirp.Body,
+		UserID:    chirp.UserID,
+	}
+
+	resDataJSON, err := json.Marshal(resData)
+	if err != nil {
+		log.Printf("Error marshalling JSON: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	w.Write(resDataJSON)
+
+}
+
+func (cfg *apiConfig) GetAllChirpsInAsc(w http.ResponseWriter, r *http.Request) {
+	chirps, err := cfg.db.GetAllChirpsInAsc(r.Context())
+	if err != nil {
+		log.Printf("Error fetching chirps: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	var chirpResponses []Chirp
+	for _, chirp := range chirps {
+		chirpResponse := Chirp{
+			ID:        chirp.ID,
+			CreatedAt: chirp.CreatedAt,
+			UpdatedAt: chirp.UpdatedAt,
+			Body:      chirp.Body,
+			UserID:    chirp.UserID,
+		}
+		chirpResponses = append(chirpResponses, chirpResponse)
+	}
+
+	resDataJSON, err := json.Marshal(chirpResponses)
+	if err != nil {
+		log.Printf("Error marshalling JSON: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	w.Write(resDataJSON)
+}
+
+func (cfg *apiConfig) GetChirpById(w http.ResponseWriter, r *http.Request) {
+	chirpId, err := uuid.Parse(r.PathValue("chirpID"))
+	if err != nil {
+		log.Printf("Error fetching chirps: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	chirp, err := cfg.db.GetChirpById(r.Context(), chirpId)
+	if err != nil {
+		log.Printf("Error fetching chirps: %s", err)
+		w.WriteHeader(404)
+		return
+	}
+
+	resData := Chirp{
+		ID:        chirp.ID,
+		CreatedAt: chirp.CreatedAt,
+		UpdatedAt: chirp.UpdatedAt,
+		Body:      chirp.Body,
+		UserID:    chirp.UserID,
+	}
+
+	resDataJSON, err := json.Marshal(resData)
+	if err != nil {
+		log.Printf("Error marshalling JSON: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	w.Write(resDataJSON)
 }
