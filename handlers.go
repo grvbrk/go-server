@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"githuv.com/grvbrk/go-server/internal/auth"
 	"githuv.com/grvbrk/go-server/internal/database"
 )
 
@@ -57,7 +58,8 @@ func (cfg *apiConfig) Admin_ResetNumberOfHitsHandler(w http.ResponseWriter, r *h
 
 func (cfg *apiConfig) AddUserHandler(w http.ResponseWriter, r *http.Request) {
 	type reqBodyStruct struct {
-		Email string `json:"email"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 
 	type resBodyStruct struct {
@@ -82,13 +84,24 @@ func (cfg *apiConfig) AddUserHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := cfg.db.CreateUser(r.Context(), body.Email)
+	hashedPassword, err := auth.HashPassword(body.Password)
+	if err != nil {
+		log.Printf("Error hashing password: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	user, err := cfg.db.CreateUser(r.Context(), database.CreateUserParams{
+		Email:          body.Email,
+		HashedPassword: hashedPassword,
+	})
 	if err != nil {
 		log.Printf("Error creating user: %s", err)
 		w.WriteHeader(500)
 		return
 	}
 
+	// Response initiated ---
 	resData := resBodyStruct{
 		ID:        user.ID,
 		CreatedAt: user.CreatedAt,
@@ -110,8 +123,7 @@ func (cfg *apiConfig) AddUserHandler(w http.ResponseWriter, r *http.Request) {
 
 func (cfg *apiConfig) CreateChirpHandler(w http.ResponseWriter, r *http.Request) {
 	type reqBodyStruct struct {
-		UserId uuid.UUID `json:"user_id"`
-		Body   string    `json:"body"`
+		Body string `json:"body"`
 	}
 
 	type resBodyStruct struct {
@@ -120,6 +132,21 @@ func (cfg *apiConfig) CreateChirpHandler(w http.ResponseWriter, r *http.Request)
 		UpdatedAt time.Time `json:"updated_at"`
 		Body      string    `json:"body"`
 		UserID    uuid.UUID `json:"user_id"`
+	}
+
+	// Check for access token
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		log.Printf("Error getting bearer/access token: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	userID, err := auth.ValidateJWT(token, cfg.jwt_secret)
+	if err != nil {
+		log.Printf("Couldn't validate JWT: %s", err)
+		w.WriteHeader(500)
+		return
 	}
 
 	body := reqBodyStruct{}
@@ -138,7 +165,7 @@ func (cfg *apiConfig) CreateChirpHandler(w http.ResponseWriter, r *http.Request)
 	}
 
 	chirp, err := cfg.db.CreateChirp(r.Context(), database.CreateChirpParams{
-		UserID: body.UserId,
+		UserID: userID,
 		Body:   body.Body,
 	})
 	if err != nil {
@@ -147,6 +174,7 @@ func (cfg *apiConfig) CreateChirpHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Response initiated ---
 	resData := resBodyStruct{
 		ID:        chirp.ID,
 		CreatedAt: chirp.CreatedAt,
@@ -229,6 +257,82 @@ func (cfg *apiConfig) GetChirpById(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	w.Write(resDataJSON)
+}
+
+func (cfg *apiConfig) LoginUser(w http.ResponseWriter, r *http.Request) {
+	type reqBodyStruct struct {
+		Email            string `json:"email"`
+		Password         string `json:"password"`
+		ExpiresInSeconds int    `json:"expires_in_seconds"`
+	}
+
+	type resBodyStruct struct {
+		ID        uuid.UUID `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Email     string    `json:"email"`
+		Token     string    `json:"token"`
+	}
+
+	body := reqBodyStruct{}
+	reqBodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		log.Printf("Error decoding parameters: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	err = json.Unmarshal(reqBodyBytes, &body)
+	if err != nil {
+		log.Printf("Error unmarshalling body: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	user, err := cfg.db.GetUserByEmail(r.Context(), body.Email)
+	if err != nil {
+		log.Printf("Error finding user: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	err = auth.CheckPasswordHash(body.Password, user.HashedPassword)
+	if err != nil {
+		log.Printf("Unauthenticated User: %s", err)
+		w.WriteHeader(401)
+		return
+	}
+
+	expirationTime := time.Hour
+	if body.ExpiresInSeconds > 0 && body.ExpiresInSeconds < 3600 {
+		expirationTime = time.Duration(body.ExpiresInSeconds) * time.Second
+	}
+
+	accessToken, err := auth.MakeJWT(user.ID, cfg.jwt_secret, expirationTime)
+	if err != nil {
+		log.Printf("Unable to create access token: %s", err)
+		w.WriteHeader(401)
+		return
+	}
+
+	// Response initiated ---
+	resData := resBodyStruct{
+		ID:        user.ID,
+		CreatedAt: user.CreatedAt,
+		UpdatedAt: user.UpdatedAt,
+		Email:     user.Email,
+		Token:     accessToken,
+	}
+
+	resDataJSON, err := json.Marshal(resData)
+	if err != nil {
+		log.Printf("Error marshalling JSON: %s", err)
+		w.WriteHeader(500)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
 	w.Write(resDataJSON)

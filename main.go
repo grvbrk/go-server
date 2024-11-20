@@ -16,6 +16,7 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	db             *database.Queries
 	platform       string
+	jwt_secret     string
 }
 
 func main() {
@@ -23,6 +24,7 @@ func main() {
 	godotenv.Load()
 	dbURL := os.Getenv("DB_URL")
 	platform := os.Getenv("PLATFORM")
+	jwt_secret := os.Getenv("JWT_SECRET")
 
 	db, err := sql.Open("postgres", dbURL)
 
@@ -35,8 +37,10 @@ func main() {
 
 	mux := http.NewServeMux()
 	apiCfg := apiConfig{
-		db:       dbQueries,
-		platform: platform,
+		fileserverHits: atomic.Int32{},
+		db:             dbQueries,
+		platform:       platform,
+		jwt_secret:     jwt_secret,
 	}
 
 	mux.Handle("/app/", apiCfg.middlewareMetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir(".")))))
@@ -47,6 +51,7 @@ func main() {
 	mux.HandleFunc("POST /api/chirps", apiCfg.CreateChirpHandler)
 	mux.HandleFunc("GET /api/chirps", apiCfg.GetAllChirpsInAsc)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.GetChirpById)
+	mux.HandleFunc("POST /api/login", apiCfg.LoginUser)
 
 	appServer := &http.Server{
 		Addr:    ":8080",
