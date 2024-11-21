@@ -14,3 +14,12 @@ ORDER BY created_at ASC;
 SELECT *
 FROM chirps
 WHERE id = $1;
+
+-- name: DeleteChirpById :exec
+DELETE FROM chirps
+WHERE id = $1;
+
+-- name: UpgradeToChirpyRed :one
+UPDATE users SET is_chirpy_red = true, updated_at = NOW()
+WHERE id = $1
+RETURNING *;
