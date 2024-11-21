@@ -138,14 +138,14 @@ func (cfg *apiConfig) CreateChirpHandler(w http.ResponseWriter, r *http.Request)
 	token, err := auth.GetBearerToken(r.Header)
 	if err != nil {
 		log.Printf("Error getting bearer/access token: %s", err)
-		w.WriteHeader(500)
+		w.WriteHeader(401)
 		return
 	}
 
 	userID, err := auth.ValidateJWT(token, cfg.jwt_secret)
 	if err != nil {
 		log.Printf("Couldn't validate JWT: %s", err)
-		w.WriteHeader(500)
+		w.WriteHeader(401)
 		return
 	}
 
@@ -264,17 +264,17 @@ func (cfg *apiConfig) GetChirpById(w http.ResponseWriter, r *http.Request) {
 
 func (cfg *apiConfig) LoginUser(w http.ResponseWriter, r *http.Request) {
 	type reqBodyStruct struct {
-		Email            string `json:"email"`
-		Password         string `json:"password"`
-		ExpiresInSeconds int    `json:"expires_in_seconds"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 
 	type resBodyStruct struct {
-		ID        uuid.UUID `json:"id"`
-		CreatedAt time.Time `json:"created_at"`
-		UpdatedAt time.Time `json:"updated_at"`
-		Email     string    `json:"email"`
-		Token     string    `json:"token"`
+		ID           uuid.UUID `json:"id"`
+		CreatedAt    time.Time `json:"created_at"`
+		UpdatedAt    time.Time `json:"updated_at"`
+		Email        string    `json:"email"`
+		Token        string    `json:"token"`
+		RefreshToken string    `json:"refresh_token"`
 	}
 
 	body := reqBodyStruct{}
@@ -306,25 +306,39 @@ func (cfg *apiConfig) LoginUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	expirationTime := time.Hour
-	if body.ExpiresInSeconds > 0 && body.ExpiresInSeconds < 3600 {
-		expirationTime = time.Duration(body.ExpiresInSeconds) * time.Second
-	}
-
-	accessToken, err := auth.MakeJWT(user.ID, cfg.jwt_secret, expirationTime)
+	accessToken, err := auth.MakeJWT(user.ID, cfg.jwt_secret, time.Hour)
 	if err != nil {
 		log.Printf("Unable to create access token: %s", err)
-		w.WriteHeader(401)
+		w.WriteHeader(500)
+		return
+	}
+
+	refreshToken, err := auth.MakeRefreshToken()
+	if err != nil {
+		log.Printf("Unable to create refresh token: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	_, err = cfg.db.CreateRefreshToken(r.Context(), database.CreateRefreshTokenParams{
+		UserID:    user.ID,
+		Token:     refreshToken,
+		ExpiresAt: time.Now().UTC().Add(time.Hour * 24 * 60),
+	})
+	if err != nil {
+		log.Printf("Couldn't save refresh token: %s", err)
+		w.WriteHeader(500)
 		return
 	}
 
 	// Response initiated ---
 	resData := resBodyStruct{
-		ID:        user.ID,
-		CreatedAt: user.CreatedAt,
-		UpdatedAt: user.UpdatedAt,
-		Email:     user.Email,
-		Token:     accessToken,
+		ID:           user.ID,
+		CreatedAt:    user.CreatedAt,
+		UpdatedAt:    user.UpdatedAt,
+		Email:        user.Email,
+		Token:        accessToken,
+		RefreshToken: refreshToken,
 	}
 
 	resDataJSON, err := json.Marshal(resData)
@@ -336,4 +350,68 @@ func (cfg *apiConfig) LoginUser(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
 	w.Write(resDataJSON)
+}
+
+func (cfg *apiConfig) RefreshTokenHandler(w http.ResponseWriter, r *http.Request) {
+	type resBodyStruct struct {
+		Token string `json:"token"`
+	}
+
+	refreshToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		log.Printf("Couldn't find token: %s", err)
+		w.WriteHeader(400)
+		return
+	}
+
+	user, err := cfg.db.GetUserFromRefreshToken(r.Context(), refreshToken)
+	if err != nil {
+		log.Printf("Couldn't get user for refresh token: %s", err)
+		w.WriteHeader(401)
+		return
+	}
+
+	accessToken, err := auth.MakeJWT(
+		user.ID,
+		cfg.jwt_secret,
+		time.Hour,
+	)
+	if err != nil {
+		log.Printf("Couldn't validate token: %s", err)
+		w.WriteHeader(401)
+		return
+	}
+
+	resData := resBodyStruct{
+		Token: accessToken,
+	}
+
+	resDataJSON, err := json.Marshal(resData)
+	if err != nil {
+		log.Printf("Error marshalling JSON: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	w.Write(resDataJSON)
+}
+
+func (cfg *apiConfig) RefreshTokenRevokeHandler(w http.ResponseWriter, r *http.Request) {
+	refreshToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		log.Printf("Couldn't find token: %s", err)
+		w.WriteHeader(400)
+		return
+	}
+
+	_, err = cfg.db.RevokeRefreshToken(r.Context(), refreshToken)
+
+	if err != nil {
+		log.Printf("Couldn't revoke session: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	w.WriteHeader(204)
 }
