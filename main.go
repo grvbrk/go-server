@@ -47,13 +47,16 @@ func main() {
 	mux.HandleFunc("GET /api/healthz", apiCfg.HealthCheckHandler)
 	mux.HandleFunc("GET /admin/metrics", apiCfg.Admin_GetNumberOfHitsHandler)
 	mux.HandleFunc("POST /admin/reset", apiCfg.Admin_ResetNumberOfHitsHandler)
-	mux.HandleFunc("POST /api/users", apiCfg.AddUserHandler)
+	mux.HandleFunc("POST /api/users", apiCfg.CreateUserHandler)
 	mux.HandleFunc("POST /api/chirps", apiCfg.CreateChirpHandler)
 	mux.HandleFunc("GET /api/chirps", apiCfg.GetAllChirpsInAsc)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.GetChirpById)
 	mux.HandleFunc("POST /api/login", apiCfg.LoginUser)
 	mux.HandleFunc("POST /api/refresh", apiCfg.RefreshTokenHandler)
 	mux.HandleFunc("POST /api/revoke", apiCfg.RefreshTokenRevokeHandler)
+	mux.HandleFunc("PUT /api/users", apiCfg.UpdateUserCredsHandler)
+	mux.HandleFunc("DELETE /api/chirps/{chirpID}", apiCfg.DeleteChirpByIdHandler)
+	mux.HandleFunc("POST /api/polka/webhooks", apiCfg.WebhookHandler)
 
 	appServer := &http.Server{
 		Addr:    ":8080",

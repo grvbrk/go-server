@@ -1,7 +1,9 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -56,17 +58,18 @@ func (cfg *apiConfig) Admin_ResetNumberOfHitsHandler(w http.ResponseWriter, r *h
 	w.WriteHeader(http.StatusOK)
 }
 
-func (cfg *apiConfig) AddUserHandler(w http.ResponseWriter, r *http.Request) {
+func (cfg *apiConfig) CreateUserHandler(w http.ResponseWriter, r *http.Request) {
 	type reqBodyStruct struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
 	}
 
 	type resBodyStruct struct {
-		ID        uuid.UUID `json:"id"`
-		CreatedAt time.Time `json:"created_at"`
-		UpdatedAt time.Time `json:"updated_at"`
-		Email     string    `json:"email"`
+		ID          uuid.UUID `json:"id"`
+		CreatedAt   time.Time `json:"created_at"`
+		UpdatedAt   time.Time `json:"updated_at"`
+		Email       string    `json:"email"`
+		IsChirpyRed bool      `json:"is_chirpy_red"`
 	}
 
 	body := reqBodyStruct{}
@@ -103,10 +106,11 @@ func (cfg *apiConfig) AddUserHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Response initiated ---
 	resData := resBodyStruct{
-		ID:        user.ID,
-		CreatedAt: user.CreatedAt,
-		UpdatedAt: user.UpdatedAt,
-		Email:     user.Email,
+		ID:          user.ID,
+		CreatedAt:   user.CreatedAt,
+		UpdatedAt:   user.UpdatedAt,
+		Email:       user.Email,
+		IsChirpyRed: user.IsChirpyRed,
 	}
 
 	resDataJSON, err := json.Marshal(resData)
@@ -230,7 +234,7 @@ func (cfg *apiConfig) GetAllChirpsInAsc(w http.ResponseWriter, r *http.Request) 
 func (cfg *apiConfig) GetChirpById(w http.ResponseWriter, r *http.Request) {
 	chirpId, err := uuid.Parse(r.PathValue("chirpID"))
 	if err != nil {
-		log.Printf("Error fetching chirps: %s", err)
+		log.Printf("Error getting chirpID: %s", err)
 		w.WriteHeader(500)
 		return
 	}
@@ -275,6 +279,7 @@ func (cfg *apiConfig) LoginUser(w http.ResponseWriter, r *http.Request) {
 		Email        string    `json:"email"`
 		Token        string    `json:"token"`
 		RefreshToken string    `json:"refresh_token"`
+		IsChirpyRed  bool      `json:"is_chirpy_red"`
 	}
 
 	body := reqBodyStruct{}
@@ -339,6 +344,7 @@ func (cfg *apiConfig) LoginUser(w http.ResponseWriter, r *http.Request) {
 		Email:        user.Email,
 		Token:        accessToken,
 		RefreshToken: refreshToken,
+		IsChirpyRed:  user.IsChirpyRed,
 	}
 
 	resDataJSON, err := json.Marshal(resData)
@@ -382,6 +388,7 @@ func (cfg *apiConfig) RefreshTokenHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Response initiated ---
 	resData := resBodyStruct{
 		Token: accessToken,
 	}
@@ -413,5 +420,179 @@ func (cfg *apiConfig) RefreshTokenRevokeHandler(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	// Response initiated ---
+	w.WriteHeader(204)
+}
+
+func (cfg *apiConfig) UpdateUserCredsHandler(w http.ResponseWriter, r *http.Request) {
+
+	type reqBodyStruct struct {
+		NewEmail    string `json:"email"`
+		NewPassword string `json:"password"`
+	}
+
+	type resBodyStruct struct {
+		ID          uuid.UUID `json:"id"`
+		CreatedAt   time.Time `json:"created_at"`
+		UpdatedAt   time.Time `json:"updated_at"`
+		Email       string    `json:"email"`
+		IsChirpyRed bool      `json:"is_chirpy_red"`
+	}
+
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		log.Printf("Couldn't find JWT token: %s", err)
+		w.WriteHeader(401)
+		return
+	}
+
+	userID, err := auth.ValidateJWT(token, cfg.jwt_secret)
+	if err != nil {
+		log.Printf("Couldn't validate JWT: %s", err)
+		w.WriteHeader(401)
+		return
+	}
+
+	body := reqBodyStruct{}
+	reqBodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		log.Printf("Error decoding parameters: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	err = json.Unmarshal(reqBodyBytes, &body)
+	if err != nil {
+		log.Printf("Error unmarshalling body: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	hashedPassword, err := auth.HashPassword(body.NewPassword)
+	if err != nil {
+		log.Printf("Error hashing password: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	user, err := cfg.db.UpdateUser(r.Context(), database.UpdateUserParams{
+		ID:             userID,
+		Email:          body.NewEmail,
+		HashedPassword: hashedPassword,
+	})
+	if err != nil {
+		log.Printf("Error hashing password: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	// Response initiated ---
+	resData := resBodyStruct{
+		ID:          user.ID,
+		CreatedAt:   user.CreatedAt,
+		UpdatedAt:   user.UpdatedAt,
+		Email:       user.Email,
+		IsChirpyRed: user.IsChirpyRed,
+	}
+
+	resDataJSON, err := json.Marshal(resData)
+	if err != nil {
+		log.Printf("Error marshalling JSON: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	w.Write(resDataJSON)
+}
+
+func (cfg *apiConfig) DeleteChirpByIdHandler(w http.ResponseWriter, r *http.Request) {
+
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		log.Printf("Couldn't find JWT token: %s", err)
+		w.WriteHeader(401)
+		return
+	}
+
+	userID, err := auth.ValidateJWT(token, cfg.jwt_secret)
+	if err != nil {
+		log.Printf("Couldn't validate JWT: %s", err)
+		w.WriteHeader(403)
+		return
+	}
+
+	chirpId, err := uuid.Parse(r.PathValue("chirpID"))
+	if err != nil {
+		log.Printf("Error getting chirpID: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	chirp, err := cfg.db.GetChirpById(r.Context(), chirpId)
+	if err != nil {
+		log.Printf("Couldn't find chirp for the given user: %s", err)
+		w.WriteHeader(404)
+		return
+	}
+
+	if chirp.UserID != userID {
+		log.Printf("You can't delete this chirp: %s", err)
+		w.WriteHeader(403)
+		return
+	}
+
+	err = cfg.db.DeleteChirpById(r.Context(), chirpId)
+	if err != nil {
+		log.Printf("Error deleting chirp: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	// Response initiated ---
+	w.WriteHeader(204)
+}
+
+func (cfg *apiConfig) WebhookHandler(w http.ResponseWriter, r *http.Request) {
+	type reqBodyStruct struct {
+		Event string `json:"event"`
+		Data  struct {
+			UserID uuid.UUID `json:"user_id"`
+		}
+	}
+
+	body := reqBodyStruct{}
+	reqBodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		log.Printf("Error decoding parameters: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	err = json.Unmarshal(reqBodyBytes, &body)
+	if err != nil {
+		log.Printf("Error unmarshalling body: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	if body.Event != "user.upgraded" {
+		w.WriteHeader(204)
+		return
+	}
+
+	_, err = cfg.db.UpgradeToChirpyRed(r.Context(), body.Data.UserID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			log.Printf("Couldn't find user: %s", err)
+			w.WriteHeader(404)
+			return
+		}
+		log.Printf("Couldn't update user: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	// Response initiated ---
 	w.WriteHeader(204)
 }
