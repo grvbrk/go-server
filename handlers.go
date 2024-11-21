@@ -561,6 +561,19 @@ func (cfg *apiConfig) WebhookHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	apiKey, err := auth.GetAPIKey(r.Header)
+	if err != nil {
+		log.Printf("Couldn't find api key: %s", err)
+		w.WriteHeader(401)
+		return
+	}
+
+	if apiKey != cfg.polka_key {
+		log.Printf("API key is invalid: %s", err)
+		w.WriteHeader(401)
+		return
+	}
+
 	body := reqBodyStruct{}
 	reqBodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
