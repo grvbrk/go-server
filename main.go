@@ -52,7 +52,7 @@ func main() {
 	mux.HandleFunc("POST /admin/reset", apiCfg.Admin_ResetNumberOfHitsHandler)
 	mux.HandleFunc("POST /api/users", apiCfg.CreateUserHandler)
 	mux.HandleFunc("POST /api/chirps", apiCfg.CreateChirpHandler)
-	mux.HandleFunc("GET /api/chirps", apiCfg.GetAllChirpsInAsc)
+	mux.HandleFunc("GET /api/chirps", apiCfg.GetChirpsInAsc)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.GetChirpById)
 	mux.HandleFunc("POST /api/login", apiCfg.LoginUser)
 	mux.HandleFunc("POST /api/refresh", apiCfg.RefreshTokenHandler)

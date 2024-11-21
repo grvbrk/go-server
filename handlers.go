@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -199,7 +200,8 @@ func (cfg *apiConfig) CreateChirpHandler(w http.ResponseWriter, r *http.Request)
 
 }
 
-func (cfg *apiConfig) GetAllChirpsInAsc(w http.ResponseWriter, r *http.Request) {
+func (cfg *apiConfig) GetChirpsInAsc(w http.ResponseWriter, r *http.Request) {
+
 	chirps, err := cfg.db.GetAllChirpsInAsc(r.Context())
 	if err != nil {
 		log.Printf("Error fetching chirps: %s", err)
@@ -207,8 +209,25 @@ func (cfg *apiConfig) GetAllChirpsInAsc(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	var chirpResponses []Chirp
+	authorID := uuid.Nil
+	authorIDString := r.URL.Query().Get("author_id")
+	if authorIDString != "" {
+		authorID, err = uuid.Parse(authorIDString)
+		if err != nil {
+			log.Printf("Invalid author ID: %s", err)
+			w.WriteHeader(400)
+			return
+		}
+	}
+
+	sortParam := r.URL.Query().Get("sort")
+
+	// Response initiated ---
+	chirpResponses := []Chirp{}
 	for _, chirp := range chirps {
+		if authorID != uuid.Nil && chirp.UserID != authorID {
+			continue
+		}
 		chirpResponse := Chirp{
 			ID:        chirp.ID,
 			CreatedAt: chirp.CreatedAt,
@@ -218,6 +237,13 @@ func (cfg *apiConfig) GetAllChirpsInAsc(w http.ResponseWriter, r *http.Request) 
 		}
 		chirpResponses = append(chirpResponses, chirpResponse)
 	}
+
+	sort.Slice(chirpResponses, func(i, j int) bool {
+		if sortParam == "desc" {
+			return chirpResponses[i].CreatedAt.After(chirpResponses[j].CreatedAt)
+		}
+		return chirpResponses[i].CreatedAt.Before(chirpResponses[j].CreatedAt)
+	})
 
 	resDataJSON, err := json.Marshal(chirpResponses)
 	if err != nil {
