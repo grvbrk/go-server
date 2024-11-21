@@ -37,6 +37,16 @@ func (q *Queries) CreateChirp(ctx context.Context, arg CreateChirpParams) (Chirp
 	return i, err
 }
 
+const deleteChirpById = `-- name: DeleteChirpById :exec
+DELETE FROM chirps
+WHERE id = $1
+`
+
+func (q *Queries) DeleteChirpById(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.ExecContext(ctx, deleteChirpById, id)
+	return err
+}
+
 const getAllChirpsInAsc = `-- name: GetAllChirpsInAsc :many
 SELECT id, created_at, updated_at, body, user_id
 FROM chirps
@@ -87,6 +97,26 @@ func (q *Queries) GetChirpById(ctx context.Context, id uuid.UUID) (Chirp, error)
 		&i.UpdatedAt,
 		&i.Body,
 		&i.UserID,
+	)
+	return i, err
+}
+
+const upgradeToChirpyRed = `-- name: UpgradeToChirpyRed :one
+UPDATE users SET is_chirpy_red = true, updated_at = NOW()
+WHERE id = $1
+RETURNING id, created_at, updated_at, email, hashed_password, is_chirpy_red
+`
+
+func (q *Queries) UpgradeToChirpyRed(ctx context.Context, id uuid.UUID) (User, error) {
+	row := q.db.QueryRowContext(ctx, upgradeToChirpyRed, id)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Email,
+		&i.HashedPassword,
+		&i.IsChirpyRed,
 	)
 	return i, err
 }
